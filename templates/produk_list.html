@@ -95,8 +95,7 @@
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h2 class="mb-0">Daftar Produk</h2>
         <a
-            href="{{ url_for('export_produk_excel') }}"
-            class="btn btn-success"
+          href="{{ url_for('export_produk_excel', q=request.args.get('q', '')) }}" class="btn btn-success ms-2"
             ><i class="fas fa-file-excel"></i> Unduh Excel</a
           >
         {% if session['role'] == 'admin' %}
@@ -145,7 +144,7 @@
           {% for p in produk %}
           <tr>
             <td>{{ p['nama_produk'] }}</td>
-            <td>Rp {{ "{:,.0f}".format(p['harga']) }}</td>
+            <td>Rp{{ "{:,.0f}".format(p['harga']) }}</td>
             <td>{{ p['stok'] }}</td>
             <td>
               {% if p['foto'] %}

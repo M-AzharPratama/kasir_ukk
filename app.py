@@ -1,7 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_mysqldb import MySQL
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
 from functools import wraps
 from werkzeug.utils import secure_filename
 import os
@@ -14,6 +13,18 @@ from openpyxl import Workbook
 from collections import defaultdict
 import uuid
 from pathlib import Path
+from flask import make_response
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import cm
+from reportlab.platypus import Table, TableStyle, Image, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from babel.numbers import format_currency
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+from datetime import datetime, timedelta
+
 
 app = Flask(__name__, instance_relative_config=True)
 app.config.from_pyfile('config.py')
@@ -23,6 +34,19 @@ app.secret_key = app.config['SECRET_KEY']
 mysql.init_app(app)  # pastikan inisialisasi
 
 persen = 0.01
+
+def format_rupiah_excel(angka):
+    # Mengubah angka menjadi format seperti 100.000
+    return "{:,.0f}".format(angka).replace(",", ".")
+
+# def format_rupiah(angka):
+#     try:
+#         return "{:,.0f}".format(float(angka)).replace(",", ".")
+#     except:
+#         return "0"
+
+def format_rupiah(angka):
+    return format_currency(angka, 'IDR', locale='id_ID', format=u'¤#,##0')
 
 def generate_nomor_pembayaran():
     return uuid.uuid4().hex[:12].upper()
@@ -170,20 +194,42 @@ def export_users_excel():
     headers = ['Nama User', 'Email', 'Role']
     ws.append(headers)
 
-    # Data baris
-    for p in users_list:
-        ws.append([
-            p['name'],
-            p['email'],
-            p['role'],
-        ])
+    # Gaya header
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4F81BD")
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
 
-    # Simpan ke dalam memori untuk dikirim sebagai file
+    for col_num, column_title in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    # Isi data
+    for row_index, user in enumerate(users_list, start=2):
+        ws.cell(row=row_index, column=1, value=user['name'])
+        ws.cell(row=row_index, column=2, value=user['email'])
+        ws.cell(row=row_index, column=3, value=user['role'])
+        for col in range(1, 4):
+            ws.cell(row=row_index, column=col).border = border
+            ws.cell(row=row_index, column=col).alignment = Alignment(vertical="center")
+
+    # Menyesuaikan lebar kolom otomatis
+    for column_cells in ws.columns:
+        length = max(len(str(cell.value or "")) for cell in column_cells)
+        ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+
+    # Simpan ke dalam memori
     file_stream = BytesIO()
     wb.save(file_stream)
     file_stream.seek(0)
 
-    # Kirim file sebagai response
     return send_file(
         file_stream,
         as_attachment=True,
@@ -348,36 +394,71 @@ def produk_list():
 def export_produk_excel():
     cur = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
 
-    # Ambil data yang sesuai
-    cur.execute("""
-        SELECT nama_produk as name, harga, stok
-        FROM produk
-    """)
-    users_list = cur.fetchall()
+    q = request.args.get('q', '').strip()
 
-    # Buat workbook Excel
+    query = """
+        SELECT nama_produk, harga, stok
+        FROM produk
+        WHERE 1=1
+    """
+    params = []
+
+    if q:
+        query += " AND nama_produk LIKE %s"
+        params.append(f"%{q}%")
+
+    cur.execute(query, tuple(params))
+    produk_list = cur.fetchall()
+    cur.close()
+
+    # Buat file Excel
     wb = Workbook()
     ws = wb.active
     ws.title = "Daftar Produk"
 
-    # Header kolom
+    # Header
     headers = ['Nama Produk', 'Harga', 'Stok']
     ws.append(headers)
 
-    # Data baris
-    for p in users_list:
-        ws.append([
-            p['name'],
-            p['harga'],
-            p['stok'],
-        ])
+    # Gaya untuk header
+    header_font = Font(bold=True, color="000000")
+    header_fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+    border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
 
-    # Simpan ke dalam memori untuk dikirim sebagai file
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = border
+
+    # Data baris
+    for row_num, p in enumerate(produk_list, start=2):
+        row_data = [p['nama_produk'], format_rupiah(p['harga']), p['stok']]
+        for col_num, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_num, column=col_num, value=value)
+            cell.border = border
+
+    # Auto-width kolom
+    for col in ws.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        adjusted_width = max_length + 2
+        ws.column_dimensions[column].width = adjusted_width
+
+    # Simpan ke memori
     file_stream = BytesIO()
     wb.save(file_stream)
     file_stream.seek(0)
 
-    # Kirim file sebagai response
     return send_file(
         file_stream,
         as_attachment=True,
@@ -510,25 +591,33 @@ def produk_detail(id):
 @app.route('/pembelian')
 @login_required
 def lihat_pembelian():
-    q = request.args.get('q', '')
-    tanggal = request.args.get('tanggal', '')
+    q = request.args.get('q', '')  # Pencarian nama pembelian
+    start_date = request.args.get('start_date', '')  # Tanggal mulai
+    end_date = request.args.get('end_date', '')  # Tanggal akhir
 
     cur = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
-
-    base_query = "SELECT * FROM pembelian WHERE 1=1"
+    base_query = "SELECT * FROM pembelian WHERE 1=1"  # Query dasar untuk mengambil data
     params = []
 
     if q:
         base_query += " AND nama LIKE %s"
-        params.append('%' + q + '%')
+        params.append('%' + q + '%')  # Filter berdasarkan nama pembelian
 
-    if tanggal:
-        base_query += " AND DATE(tgl_pembelian) = %s"
-        params.append(tanggal)
+    if start_date and end_date:
+        try:
+            # Mengubah tanggal mulai dan tanggal akhir menjadi objek datetime
+            start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d')
 
-    base_query += " ORDER BY tgl_pembelian DESC"
-    cur.execute(base_query, tuple(params))
-    pembelian_data = cur.fetchall()
+            # Filter berdasarkan rentang tanggal
+            base_query += " AND tgl_pembelian BETWEEN %s AND %s"
+            params.extend([start_date_obj.date(), end_date_obj.date()])
+        except:
+            pass
+
+    base_query += " ORDER BY tgl_pembelian DESC"  # Urutkan berdasarkan tanggal pembelian
+    cur.execute(base_query, tuple(params))  # Eksekusi query dengan parameter
+    pembelian_data = cur.fetchall()  # Ambil hasil query
     cur.close()
 
     return render_template('pembelian_list.html', pembelian=pembelian_data)
@@ -536,40 +625,127 @@ def lihat_pembelian():
 @app.route('/pembelian/export-excel')
 @login_required
 def export_pembelian_excel():
+    start_date = request.args.get('start_date', '')  # Tanggal mulai
+    end_date = request.args.get('end_date', '')  # Tanggal akhir
+    q = request.args.get('q', '')  # Pencarian nama pembelian
+
     cur = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
 
-    # Ambil data yang sesuai
-    cur.execute("""
-        SELECT nama AS nama_pelanggan, role_pembuat AS dibuat_oleh, total AS total_harga, tgl_pembelian
-        FROM pembelian
-        ORDER BY tgl_pembelian DESC
-    """)
+    query = """
+        SELECT 
+            p.id,
+            p.nama AS nama_pelanggan,
+            p.role_pembuat AS dibuat_oleh,
+            p.total AS total_harga,
+            p.total_bayar,
+            p.diskon,
+            p.kembalian,
+            p.sisa_point,
+            p.nomor_pembayaran,
+            p.tgl_pembelian,
+            m.no_hp,
+            m.status AS status_member,
+            m.name AS nama_member,
+            m.point AS member_point,
+            m.join_date
+        FROM pembelian p
+        LEFT JOIN member m ON p.member_id = m.id
+        WHERE 1=1
+    """
+    params = []
+
+    # Filter berdasarkan nama
+    if q:
+        query += " AND p.nama LIKE %s"
+        params.append('%' + q + '%')
+
+    # Filter berdasarkan rentang tanggal (start_date dan end_date)
+    if start_date and end_date:
+        try:
+            # Mengubah start_date dan end_date menjadi objek datetime
+            start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d')
+
+            # Filter berdasarkan rentang tanggal
+            query += " AND p.tgl_pembelian BETWEEN %s AND %s"
+            params.extend([start_date_obj.date(), end_date_obj.date()])
+        except:
+            pass
+
+    query += " ORDER BY p.tgl_pembelian DESC"  # Urutkan berdasarkan tanggal pembelian
+    cur.execute(query, tuple(params))  # Eksekusi query dengan parameter
     pembelian_list = cur.fetchall()
 
-    # Buat workbook Excel
+    # Ambil detail produk
+    pembelian_produk_map = {}
+    for pembelian in pembelian_list:
+        cur.execute("""
+            SELECT prod.nama_produk, prod.harga, lp.quantity, lp.subtotal
+            FROM list_pembelian lp
+            JOIN produk prod ON lp.produk_id = prod.id
+            WHERE lp.pembelian_id = %s
+        """, (pembelian['id'],))
+        pembelian_produk_map[pembelian['id']] = cur.fetchall()
+
+    cur.close()
+
+    # Buat file Excel
     wb = Workbook()
     ws = wb.active
     ws.title = "Daftar Pembelian"
 
-    # Header kolom
-    headers = ['Nama Pelanggan', 'Dibuat Oleh', 'Total Harga', 'Tanggal Pembelian']
+    headers = [
+        'No', 'Nomor Pembayaran', 'Tanggal Pembelian', 'Nama Pelanggan', 'No HP',
+        'Status Member', 'Nama Member', 'Sisa Point', 'Reward Point', 'Dibuat Oleh',
+        'Total', 'Diskon', 'Bayar', 'Kembalian', 'Detail Produk'
+    ]
     ws.append(headers)
 
-    # Data baris
-    for p in pembelian_list:
+    header_font = Font(bold=True)
+    for col_num, column_title in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center')
+
+    persen = 0.01
+
+    for idx, p in enumerate(pembelian_list, start=1):
+        reward_point = round(float(p['total_harga']) * persen, 2)
+        produk_list = pembelian_produk_map.get(p['id'], [])
+        detail_produk = '; '.join([f"{prod['nama_produk']} (x{prod['quantity']} @ {format_rupiah(prod['harga'])})" for prod in produk_list])
         ws.append([
+            idx,
+            p['nomor_pembayaran'],
+            p['tgl_pembelian'].strftime('%d-%m-%Y') if p['tgl_pembelian'] else '',
             p['nama_pelanggan'],
+            p.get('no_hp') or '-',
+            p.get('status_member') or '-',
+            p.get('nama_member') or '-',
+            int(p['sisa_point']) if p['sisa_point'] else 0,
+            reward_point,
             p['dibuat_oleh'],
-            float(p['total_harga']),
-            str(p['tgl_pembelian']),
+            format_rupiah(p['total_harga']),
+            format_rupiah(p['diskon']),
+            format_rupiah(p['total_bayar']),
+            format_rupiah(p['kembalian']),
+            detail_produk
         ])
 
-    # Simpan ke dalam memori untuk dikirim sebagai file
+    for col in ws.columns:
+        max_length = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        ws.column_dimensions[col_letter].width = max_length + 2
+
     file_stream = BytesIO()
     wb.save(file_stream)
     file_stream.seek(0)
 
-    # Kirim file sebagai response
     return send_file(
         file_stream,
         as_attachment=True,
@@ -884,6 +1060,7 @@ from pathlib import Path
 def unduh_pembelian_pdf(pembelian_id):
     cur = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
 
+    # Ambil data pembelian
     cur.execute("""
         SELECT p.id, p.nama AS nama_pelanggan, p.tgl_pembelian, p.role_pembuat, p.total, p.total_bayar, p.diskon, p.kembalian, p.sisa_point, p.nomor_pembayaran,
                m.no_hp, m.status AS member_status, m.join_date, m.point AS member_point, m.name AS member_name
@@ -897,39 +1074,112 @@ def unduh_pembelian_pdf(pembelian_id):
         flash("Data pembelian tidak ditemukan.", "danger")
         return redirect(url_for('lihat_pembelian'))
 
+    # Ambil daftar produk
     cur.execute("""
-        SELECT prod.nama_produk AS nama_produk, prod.harga, lp.quantity, lp.subtotal, prod.foto
+        SELECT prod.nama_produk AS nama_produk, prod.harga, lp.quantity, lp.subtotal
         FROM list_pembelian lp
         JOIN produk prod ON lp.produk_id = prod.id
         WHERE lp.pembelian_id = %s
     """, (pembelian_id,))
     list_produk = cur.fetchall()
 
-    # Tambahkan path absolut foto (untuk PDF)
-    for item in list_produk:
-        if item["foto"]:
-            foto_path = Path("static/uploads") / item["foto"]
-            item["foto_path_abs"] = foto_path.resolve()
-        else:
-            item["foto_path_abs"] = None
-
+    # Hitung reward point
     point = float(pembelian['total']) * persen
 
-    rendered = render_template('pembelian_pdf.html', pembelian=pembelian, list_produk=list_produk, reward_point=point)
+    # Buat PDF
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
 
-    result = BytesIO()
-    pdf = pisa.pisaDocument(BytesIO(rendered.encode("UTF-8")), result)
+    styles = getSampleStyleSheet()
+    normal = styles["Normal"]
+    bold = styles["Heading4"]
+    title = styles["Title"]
 
-    print("foto_path")
+    # Judul utama
+    elements.append(Paragraph("INVOICE PENJUALAN", title))
+    elements.append(Spacer(1, 12))
 
-    if not pdf.err:
-        response = make_response(result.getvalue())
-        response.headers["Content-Type"] = "application/pdf"
-        response.headers["Content-Disposition"] = f"attachment; filename=pembelian_{pembelian_id}.pdf"
-        return response
-    else:
-        flash("Gagal membuat PDF", "danger")
-        return redirect(url_for('detail_pembelian', pembelian_id=pembelian_id))
+    # Informasi di bagian atas
+    info_atas = [
+        ["Nomor Pembayaran", pembelian["nomor_pembayaran"]],
+        ["Tanggal Pembelian", pembelian["tgl_pembelian"]],
+        ["Nama Pelanggan", pembelian["nama_pelanggan"]],
+        ["No Telephon", pembelian["no_hp"]],
+    ]
+    info_kanan = [
+        ["Status Member", pembelian["member_status"]],
+        ["Sisa Point", int(pembelian["sisa_point"])],
+        ["Reward Point", round(point, 2)],
+        ["Dibuat oleh", pembelian["role_pembuat"]],
+    ]
+    gabung_info = []
+    for kiri, kanan in zip(info_atas, info_kanan):
+        gabung_info.append([f"{kiri[0]}: {kiri[1]}", f"{kanan[0]}: {kanan[1]}"])
+
+    table_info = Table(gabung_info, colWidths=[8 * cm, 8 * cm])
+    table_info.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ]))
+    elements.append(table_info)
+    elements.append(Spacer(1, 20))
+
+    # Tabel Produk
+    # Gabungkan Tabel Produk + Ringkasan Pembayaran
+    elements.append(Paragraph("Daftar Produk", bold))
+
+    data_produk = [["No", "Nama Produk", "Harga", "Jumlah", "Subtotal"]]
+    for idx, item in enumerate(list_produk, start=1):
+        data_produk.append([
+            idx,
+            item["nama_produk"],
+            format_rupiah(item['harga']),
+            item["quantity"],
+            format_rupiah(item['subtotal']),
+        ])
+
+    table_produk = Table(data_produk, colWidths=[1.5*cm, 5.5*cm, 3.5*cm, 2*cm, 3.5*cm])
+    table_produk.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.4, colors.black),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),  # Harga & subtotal rata kanan
+        ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # "No" kolom rata tengah
+        ('ALIGN', (3, 1), (3, -1), 'CENTER'),  # "Jumlah" kolom rata tengah
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),  # Header tabel rata tengah
+    ]))
+    elements.append(table_produk)
+    elements.append(Spacer(1, 5))  # Spacer kecil agar lebih dekat dengan subtotal
+
+    # Ringkasan Pembayaran sebagai tabel rapi
+    data_ringkasan = [
+        ["", "", "", "Total", format_rupiah(pembelian['total'])],
+        ["", "", "", "Diskon", "-" + format_rupiah(pembelian['diskon'])],
+        ["", "", "", "Bayar", format_rupiah(pembelian['total_bayar'])],
+        ["", "", "", "Kembalian", format_rupiah(pembelian['kembalian'])],
+    ]
+
+    table_ringkasan = Table(data_ringkasan, colWidths=[1.5*cm, 5.5*cm, 3.5*cm, 2*cm, 3.5*cm])
+    table_ringkasan.setStyle(TableStyle([
+        ('ALIGN', (3, 0), (3, -1), 'RIGHT'),   # Label: Total, Diskon, etc
+        ('ALIGN', (4, 0), (4, -1), 'RIGHT'),   # Value: Rp...
+        ('FONTNAME', (3, 0), (4, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (3, 0), (4, -1), 10),
+        ('TOPPADDING', (3, 0), (4, -1), 2),
+        ('BOTTOMPADDING', (3, 0), (4, -1), 2),
+    ]))
+    elements.append(table_ringkasan)
+
+    doc.build(elements)
+
+    pdf = buffer.getvalue()
+    buffer.close()
+
+    response = make_response(pdf)
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = f"attachment; filename=pembelian_{pembelian_id}.pdf"
+    return response
 
 # ========== LOGOUT ==========
 @app.route('/logout')

@@ -166,7 +166,7 @@
               <div class="card-body">
                 <h5 class="card-title">{{ p.nama_produk }}</h5>
                 <p class="card-text">
-                  Harga: Rp {{ "{:,.0f}".format(p.harga) }}
+                  Harga: Rp {{ (p.harga) }}
                 </p>
                 <p class="card-text">Stock: {{ p.stok }}</p>
                 <input type="hidden" name="produk_id" value="{{ p.id }}" />

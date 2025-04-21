@@ -88,13 +88,61 @@
         </div>
       </div>
     </nav>
+
     <!-- Add Bootstrap JS and Popper.js -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+      // Function to update the input fields based on the selected filter
+      function updateTanggalOptions() {
+        const filter = document.getElementById("filter_tanggal").value;
+        const container = document.getElementById("tanggal_input_container");
+
+        if (filter === "harian") {
+          container.innerHTML = `<input type="date" id="tanggal" />`;
+        }
+        else if (filter === "mingguan") {
+          container.innerHTML = `
+            <select id="tanggal">
+              <option value="1">Minggu 1</option>
+              <option value="2">Minggu 2</option>
+              <option value="3">Minggu 3</option>
+              <option value="4">Minggu 4</option>
+            </select>`;
+        }
+        else if (filter === "bulanan") {
+          container.innerHTML = `
+            <select id="tanggal">
+              <option value="1">Januari</option>
+              <option value="2">Februari</option>
+              <option value="3">Maret</option>
+              <option value="4">April</option>
+              <option value="5">Mei</option>
+              <option value="6">Juni</option>
+              <option value="7">Juli</option>
+              <option value="8">Agustus</option>
+              <option value="9">September</option>
+              <option value="10">Oktober</option>
+              <option value="11">November</option>
+              <option value="12">Desember</option>
+            </select>`;
+        }
+        else if (filter === "tahunan") {
+          const currentYear = new Date().getFullYear();
+          let options = "";
+          for (let y = currentYear; y >= currentYear - 10; y--) {
+            options += `<option value="${y}">${y}</option>`;
+          }
+          container.innerHTML = `<select id="tanggal">${options}</select>`;
+        }
+      }
+    </script>
+
     <!-- isi -->
     <div class="container">
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h2>Daftar Penjualan</h2>
-        {% if session['role'] != 'ADMIN' %}
+        {% if session['role'] != 'admin' %}
         <a href="{{ url_for('tambah_pembelian') }}" class="btn btn-primary"
           >+ Tambah Penjualan</a
         >
@@ -108,10 +156,11 @@
       >
         <div class="d-flex flex-wrap gap-2 align-items-center">
           <a
-            href="{{ url_for('export_pembelian_excel') }}"
+          href="{{ url_for('export_pembelian_excel', q=request.args.get('q'), start_date=request.args.get('start_date'), end_date=request.args.get('end_date')) }}"
             class="btn btn-success"
-            ><i class="fas fa-file-excel"></i> Unduh Excel</a
           >
+            <i class="fas fa-file-excel"></i> Unduh Excel
+          </a>
           <div class="form-check">
             <input
               class="form-check-input"
@@ -134,32 +183,37 @@
         </div>
       </form>
 
-      <form
-        method="get"
-        action="{{ url_for('lihat_pembelian') }}"
-        class="mb-4 row g-3"
-      >
-        <div class="col-md-6">
-          <input
-            type="text"
-            class="form-control"
-            name="q"
-            placeholder="Cari nama pembelian..."
-            value="{{ request.args.get('q', '') }}"
-          />
+      <form method="get" action="{{ url_for('lihat_pembelian') }}" class="mb-4">
+        <div class="row align-items-end g-3">
+      
+          <!-- Filter Nama -->
+          <div class="col-md-3">
+            <label for="q" class="form-label">Nama Pembelian</label>
+            <input type="text" class="form-control" name="q" id="q"
+                   placeholder="Cari nama pembelian..." value="{{ request.args.get('q', '') }}" />
+          </div>
+      
+          <!-- Filter Tanggal Mulai -->
+          <div class="col-md-3">
+            <label for="start_date" class="form-label">Start Date</label>
+            <input type="date" class="form-control" name="start_date" id="start_date"
+                   value="{{ request.args.get('start_date', '') }}" />
+          </div>
+      
+          <!-- Filter Tanggal Selesai -->
+          <div class="col-md-3">
+            <label for="end_date" class="form-label">End Date</label>
+            <input type="date" class="form-control" name="end_date" id="end_date"
+                   value="{{ request.args.get('end_date', '') }}" />
+          </div>
+      
+          <!-- Tombol Submit -->
+          <div class="col-md-3">
+            <button type="submit" class="btn btn-secondary w-100">Cari</button>
+          </div>
+      
         </div>
-        <div class="col-md-4">
-          <input
-            type="date"
-            class="form-control"
-            name="tanggal"
-            value="{{ request.args.get('tanggal', '') }}"
-          />
-        </div>
-        <div class="col-md-2">
-          <button type="submit" class="btn btn-secondary w-100">Cari</button>
-        </div>
-      </form>
+      </form>      
 
       <div class="table-responsive">
         <table class="table table-bordered table-hover align-middle">
